@@ -1,0 +1,21 @@
+# ===================================================================
+# RestroRush - MySQL Database Configuration Template
+# ===================================================================
+# INSTRUCTIONS FOR TEAM MEMBERS:
+# 1. Do NOT put your real password in this file.
+# 2. Copy this file and rename it to 'db.properties' (in this project root).
+# 3. Enter your local MySQL username and password in 'db.properties'.
+# 4. 'db.properties' is in .gitignore, so each member's password stays
+#    completely private and safe from being committed to GitHub!
+# ===================================================================
+
+# Database connection URL (change host/port if different from standard 3306)
+# Note: The 'restrorush_db' database and tables will be auto-created if they don't exist.
+db.url=jdbc:mysql://localhost:3306/restrorush_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+
+# MySQL username (usually root for local installations)
+db.user=root
+
+# Your personal local MySQL password
+db.password=your_mysql_password_here
+

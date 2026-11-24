@@ -1,0 +1,7 @@
+ORD101,2,500.00,COMPLETED,2 x Pizza
+ORD102,shobhit,1050.00,COMPLETED,7 x Burger
+ORD101,arunima,540.00,COMPLETED,3 x Pasta
+ORD101,Shobhit,770.00,COMPLETED,2 x Pasta; 1 x Pizza; 2 x Coffee
+ORD102,Sanchit,260.00,COMPLETED,2 x Noodles
+ORD101,John,150.00,COMPLETED,1 x Burger
+ORD101,Shreya,440.00,COMPLETED,2 x Burger; 2 x Iced Tea

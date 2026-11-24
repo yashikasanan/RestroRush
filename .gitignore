@@ -1,0 +1,25 @@
+# Database password and local config (CRITICAL: NEVER COMMIT PASSWORDS)
+db.properties
+*.env
+
+# Compiled bytecode
+*.class
+out/
+bin/
+
+# IntelliJ IDEA personal workspace & caches
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/shelf/
+.idea/httpRequests/
+.idea/dataSources/
+.idea/dataSources.local.xml
+*.iws
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Logs and runtime files
+*.log
+
