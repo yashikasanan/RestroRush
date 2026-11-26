@@ -5,6 +5,8 @@ public class Chef {
     private final String chefName;
     private volatile boolean available;
     private int completedOrders;
+    private volatile long expectedFreeTimeMs;
+    private volatile int currentOrderId = -1;
 
     public Chef(int chefId, String chefName) {
         this.chefId = chefId;
@@ -25,4 +27,10 @@ public class Chef {
     public synchronized int getCompletedOrders() {
         return completedOrders;
     }
+
+    public long getExpectedFreeTimeMs() { return expectedFreeTimeMs; }
+    public void setExpectedFreeTimeMs(long timeMs) { this.expectedFreeTimeMs = timeMs; }
+
+    public int getCurrentOrderId() { return currentOrderId; }
+    public void setCurrentOrderId(int currentOrderId) { this.currentOrderId = currentOrderId; }
 }

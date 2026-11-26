@@ -5,6 +5,7 @@ import manager.ReportManager;
 import model.Dish;
 import model.Order;
 import model.OrderItem;
+import service.WaitTimeEstimator;
 import storage.OrderDatabaseHandler;
 
 import java.util.ArrayList;
@@ -19,7 +20,8 @@ public class Main {
         OrderManager orderManager = new OrderManager();
         OrderDatabaseHandler dbHandler = new OrderDatabaseHandler();
         ChefManager chefManager = new ChefManager(orderManager, dbHandler);
-        ReportManager reportManager = new ReportManager(orderManager, chefManager);
+        ReportManager reportManager = new ReportManager(orderManager, chefManager, dbHandler);
+        WaitTimeEstimator waitEstimator = new WaitTimeEstimator(chefManager, orderManager);
 
         System.out.println("==========================================");
         System.out.println("              RESTRO RUSH");
@@ -29,41 +31,52 @@ public class Main {
         boolean running = true;
         while (running) {
             printMenu();
+            chefManager.setAwaitingMenuChoice(true);
             int choice = readInt("Enter your choice: ");
+            chefManager.setAwaitingMenuChoice(false);
+            if (choice == Integer.MIN_VALUE) {
+                break;
+            }
 
             switch (choice) {
                 case 1:
                     menuManager.displayMenu();
                     break;
                 case 2:
-                    placeNewOrder(menuManager, orderManager, chefManager);
+                    placeNewOrder(menuManager, orderManager, chefManager, waitEstimator);
                     break;
                 case 3:
-                    orderManager.displayAllOrders();
+                    placeAddOnOrder(menuManager, orderManager, chefManager, waitEstimator);
                     break;
                 case 4:
-                    cancelOrder(orderManager);
+                    orderManager.displayAllOrders();
                     break;
                 case 5:
-                    chefManager.displayChefStatus();
+                    cancelOrder(orderManager);
                     break;
                 case 6:
-                    reportManager.generateRevenueReport();
+                    chefManager.displayChefStatus();
                     break;
                 case 7:
-                    reportManager.displayChefPerformance();
+                    reportManager.generateRevenueReport();
                     break;
                 case 8:
-                    dbHandler.displayOrderHistory();
+                    reportManager.displayChefPerformance();
                     break;
                 case 9:
-                    restockDish(menuManager);
+                    dbHandler.displayOrderHistory();
                     break;
                 case 10:
+                    restockDish(menuManager);
+                    break;
+                case 11:
+                    waitEstimator.displayCurrentWaitTimes();
+                    break;
+                case 12:
                     running = false;
                     break;
                 default:
-                    System.out.println("Invalid choice. Please select 1-10.");
+                    System.out.println("Invalid choice. Please select 1-12.");
             }
         }
 
@@ -75,35 +88,132 @@ public class Main {
     }
 
     private static void printMenu() {
-        System.out.println("\n--------------- MAIN MENU ---------------");
-        System.out.println("1. View Menu");
-        System.out.println("2. Place New Order");
-        System.out.println("3. View All Orders");
-        System.out.println("4. Cancel Pending Order");
-        System.out.println("5. View Chef / Kitchen Status");
-        System.out.println("6. Generate Revenue Report");
-        System.out.println("7. View Chef Performance");
-        System.out.println("8. View Saved Order History");
-        System.out.println("9. Restock Dish Quantity");
-        System.out.println("10. Exit");
-        System.out.println("-----------------------------------------");
+        synchronized (ChefManager.CONSOLE_LOCK) {
+            System.out.println("\n--------------- MAIN MENU ---------------");
+            System.out.println("1. View Menu");
+            System.out.println("2. Place New Order");
+            System.out.println("3. Place Add-On Order (Eating Customer Priority)");
+            System.out.println("4. View All Orders");
+            System.out.println("5. Cancel Pending Order");
+            System.out.println("6. View Chef / Kitchen Status");
+            System.out.println("7. Generate Revenue Report");
+            System.out.println("8. View Chef Performance");
+            System.out.println("9. View Saved Order History");
+            System.out.println("10. Restock Dish Quantity");
+            System.out.println("11. Check Estimated Wait Times");
+            System.out.println("12. Exit");
+            System.out.println("-----------------------------------------");
+        }
     }
 
     private static void placeNewOrder(MenuManager menuManager,
                                       OrderManager orderManager,
-                                      ChefManager chefManager) {
+                                      ChefManager chefManager,
+                                      WaitTimeEstimator waitEstimator) {
         menuManager.displayMenu();
         System.out.print("Enter customer name: ");
+        if (!scanner.hasNextLine()) return;
         String customerName = scanner.nextLine().trim();
         if (customerName.isEmpty()) {
             System.out.println("Customer name cannot be empty.");
             return;
         }
 
+        int priority = -1;
+        int parentOrderId = -1;
+        Order existingDiningOrder = orderManager.findLatestCompletedDineInOrderByCustomer(customerName);
+        if (existingDiningOrder != null) {
+            System.out.println("\n[ACTIVE DINING DETECTED] " + existingDiningOrder.getCustomerName()
+                    + " already has completed Dine-In order ORD" + existingDiningOrder.getOrderId()
+                    + " (" + existingDiningOrder.getDishSummary() + ").");
+            if (readYesNo("Are they currently eating and want Add-On Priority? (y/n): ")) {
+                priority = Order.PRIORITY_ADD_ON;
+                parentOrderId = existingDiningOrder.getOrderId();
+            }
+        }
+
+        List<OrderItem> items = collectOrderItems(menuManager);
+        if (items.isEmpty()) {
+            System.out.println("Order was not placed because no items were selected.");
+            return;
+        }
+
+        if (priority == -1) {
+            while (true) {
+                System.out.println("\nSelect order type:");
+                System.out.println("1. Dine-In  (High Priority - Prepared First)");
+                System.out.println("2. Takeaway (Normal Priority)");
+                int choice = readInt("Choice: ");
+                if (choice == Integer.MIN_VALUE) return;
+                if (choice == 1) {
+                    priority = Order.PRIORITY_DINE_IN;
+                    break;
+                } else if (choice == 2) {
+                    priority = Order.PRIORITY_TAKEAWAY;
+                    break;
+                }
+                System.out.println("Please enter 1 for Dine-In or 2 for Takeaway.");
+            }
+        }
+
+        submitAndDispatchOrder(menuManager, orderManager, chefManager, waitEstimator,
+                customerName, items, priority, parentOrderId);
+    }
+
+    private static void placeAddOnOrder(MenuManager menuManager,
+                                        OrderManager orderManager,
+                                        ChefManager chefManager,
+                                        WaitTimeEstimator waitEstimator) {
+        List<Order> eligibleOrders = orderManager.getCompletedDineInOrders();
+        if (eligibleOrders.isEmpty()) {
+            if (orderManager.hasInProgressDineInOrders()) {
+                System.out.println("\nNo Dine-In orders have arrived yet (still being prepared).");
+                System.out.println("Add-On priority unlocks once a Dine-In customer's food arrives (COMPLETED).");
+            } else {
+                System.out.println("\nNo seated Dine-In customers found with arrived food.");
+                System.out.println("Place a Dine-In order first (Option 2).");
+            }
+            return;
+        }
+
+        System.out.println("\n------- CUSTOMERS CURRENTLY DINING (FOOD ARRIVED) -------");
+        for (Order eligible : eligibleOrders) {
+            System.out.printf("ORD%d | %-12s | %-10s | Rs. %.2f | %s%n",
+                    eligible.getOrderId(), eligible.getCustomerName(),
+                    eligible.getOrderTypeString(), eligible.calculateTotal(),
+                    eligible.getDishSummary());
+        }
+        System.out.println("---------------------------------------------------------");
+
+        int originalId = readInt("Enter existing Order number for Add-On (e.g. 101, or 0 to cancel): ");
+        if (originalId == 0 || originalId == Integer.MIN_VALUE) return;
+
+        String validationError = orderManager.validateAddOnEligibility(originalId);
+        if (validationError != null) {
+            System.out.println(validationError);
+            return;
+        }
+
+        Order originalOrder = orderManager.findOrder(originalId);
+        System.out.println("\n[PRIORITY ADD-ON] Adding items for seated customer "
+                + originalOrder.getCustomerName() + " (ORD" + originalOrder.getOrderId() + ")");
+
+        menuManager.displayMenu();
+        List<OrderItem> items = collectOrderItems(menuManager);
+        if (items.isEmpty()) {
+            System.out.println("Add-On order was not placed because no items were selected.");
+            return;
+        }
+
+        submitAndDispatchOrder(menuManager, orderManager, chefManager, waitEstimator,
+                originalOrder.getCustomerName(), items, Order.PRIORITY_ADD_ON, originalOrder.getOrderId());
+    }
+
+    private static List<OrderItem> collectOrderItems(MenuManager menuManager) {
         List<OrderItem> items = new ArrayList<>();
         while (true) {
             int dishId = readInt("Enter dish ID (0 to finish): ");
-            if (dishId == 0) break;
+            if (dishId == 0 || dishId == Integer.MIN_VALUE) break;
 
             Dish dish = menuManager.getDishById(dishId);
             if (dish == null) {
@@ -112,6 +222,7 @@ public class Main {
             }
 
             int quantity = readInt("Enter quantity: ");
+            if (quantity == Integer.MIN_VALUE) break;
             if (quantity <= 0) {
                 System.out.println("Quantity must be positive.");
                 continue;
@@ -126,10 +237,13 @@ public class Main {
                 }
             }
 
-            int requestedTotal = quantity + (existing == null ? 0 : existing.getQuantity());
+            int inCart = (existing == null ? 0 : existing.getQuantity());
+            int requestedTotal = quantity + inCart;
             if (!menuManager.isAvailable(dishId, requestedTotal)) {
-                System.out.println("Not enough quantity available. Available: "
-                        + dish.getAvailableQuantity());
+                int remainingCanAdd = Math.max(0, dish.getAvailableQuantity() - inCart);
+                System.out.println("Not enough quantity available. Stock: "
+                        + dish.getAvailableQuantity()
+                        + (inCart > 0 ? " (already in cart: " + inCart + ", can add up to " + remainingCanAdd + ")" : ""));
                 continue;
             }
 
@@ -141,22 +255,17 @@ public class Main {
             }
             System.out.println("Added: " + quantity + " x " + dish.getDishName());
         }
+        return items;
+    }
 
-        if (items.isEmpty()) {
-            System.out.println("Order was not placed because no items were selected.");
-            return;
-        }
-
-        int priority;
-        while (true) {
-            System.out.println("\nSelect order type:");
-            System.out.println("1. Dine-In  (High Priority - Prepared First)");
-            System.out.println("2. Takeaway (Normal Priority)");
-            priority = readInt("Choice: ");
-            if (priority == 1 || priority == 2) break;
-            System.out.println("Please enter 1 for Dine-In or 2 for Takeaway.");
-        }
-
+    private static void submitAndDispatchOrder(MenuManager menuManager,
+                                               OrderManager orderManager,
+                                               ChefManager chefManager,
+                                               WaitTimeEstimator waitEstimator,
+                                               String customerName,
+                                               List<OrderItem> items,
+                                               int priority,
+                                               int parentOrderId) {
         // Reserve quantities only after the complete order has been validated.
         if (!menuManager.reserveItems(items)) {
             System.out.println("Order not placed. Stock changed, please try again.");
@@ -164,11 +273,29 @@ public class Main {
         }
 
         int orderId = orderManager.generateOrderId();
-        Order order = new Order(orderId, customerName, items, priority);
+        Order order = new Order(orderId, customerName, items, priority, parentOrderId);
         orderManager.placeOrder(order);
 
-        System.out.println("\nOrder ORD" + orderId + " (" + order.getOrderTypeString() + ") placed successfully!");
+        System.out.println("\nOrder ORD" + orderId + " (" + order.getDetailedTypeString() + ") placed successfully!");
         System.out.printf("Total bill: Rs. %.2f%n", order.calculateTotal());
+
+        if (order.isAddOn()) {
+            int queuePos = orderManager.getQueuePosition(orderId);
+            int totalPending = orderManager.getPendingOrders().size();
+            if (queuePos > 0) {
+                int jumped = Math.max(0, totalPending - queuePos);
+                if (jumped > 0) {
+                    System.out.println("[PRIORITY FAST-TRACK] Queue position: #" + queuePos
+                            + " (jumped ahead of " + jumped + " waiting order(s))!");
+                } else {
+                    System.out.println("[PRIORITY FAST-TRACK] Queue position: #" + queuePos
+                            + " (highest priority for eating customer)!");
+                }
+            }
+        }
+
+        int waitSec = waitEstimator.estimateWaitSeconds(order);
+        System.out.println("Estimated wait time: ~" + WaitTimeEstimator.formatTime(waitSec));
         chefManager.dispatchPendingOrders();
 
         // Brief delay (200ms) to let '[KITCHEN] started' print before menu redrawing
@@ -177,8 +304,20 @@ public class Main {
         } catch (InterruptedException ignored) {}
     }
 
+    private static boolean readYesNo(String prompt) {
+        while (true) {
+            System.out.print(prompt);
+            if (!scanner.hasNextLine()) return false;
+            String input = scanner.nextLine().trim().toLowerCase();
+            if (input.equals("y") || input.equals("yes")) return true;
+            if (input.equals("n") || input.equals("no")) return false;
+            System.out.println("Please enter 'y' or 'n'.");
+        }
+    }
+
     private static void cancelOrder(OrderManager orderManager) {
         int id = readInt("Enter order number to cancel (e.g. 101): ");
+        if (id == Integer.MIN_VALUE) return;
         Order order = orderManager.findOrder(id);
         if (order == null) {
             System.out.println("Order not found.");
@@ -196,7 +335,9 @@ public class Main {
     private static void restockDish(MenuManager menuManager) {
         menuManager.displayMenu();
         int id = readInt("Enter dish ID to restock: ");
+        if (id == Integer.MIN_VALUE) return;
         int quantity = readInt("Enter quantity to add: ");
+        if (quantity == Integer.MIN_VALUE) return;
         try {
             menuManager.restockDish(id, quantity);
             System.out.println("Dish quantity updated successfully.");
@@ -207,7 +348,10 @@ public class Main {
 
     private static int readInt(String prompt) {
         while (true) {
-            System.out.print(prompt);
+            synchronized (ChefManager.CONSOLE_LOCK) {
+                System.out.print(prompt);
+            }
+            if (!scanner.hasNextLine()) return Integer.MIN_VALUE;
             String input = scanner.nextLine().trim();
             try {
                 return Integer.parseInt(input);

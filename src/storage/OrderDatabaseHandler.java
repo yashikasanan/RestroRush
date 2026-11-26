@@ -8,6 +8,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * Handles database persistence and display for completed order history using MySQL.
@@ -82,7 +84,11 @@ public class OrderDatabaseHandler {
                     Timestamp ts = rs.getTimestamp("completed_at");
                     String items = rs.getString("items_summary");
 
-                    String timeStr = (ts != null) ? ts.toString().substring(0, 19) : "N/A";
+                    String timeStr = "N/A";
+                    if (ts != null) {
+                        String raw = ts.toString();
+                        timeStr = raw.substring(0, Math.min(19, raw.length()));
+                    }
                     System.out.printf("ORD%-5d %-14s %-10s Rs.%-7.2f %-10s %-10s %-20s %s%n",
                             orderId, customer, (orderType != null ? orderType : "Dine-In"),
                             bill, status, (chef != null ? chef : "N/A"), timeStr, items);
@@ -102,5 +108,57 @@ public class OrderDatabaseHandler {
             System.out.println("\n[NOTE] MySQL is currently unreachable. Displaying saved history from local file backup instead:");
             fallbackFileHandler.displayOrderHistory();
         }
+    }
+
+    public static class SavedReportStats {
+        public final int totalOrders;
+        public final int addOnOrders;
+        public final double totalRevenue;
+        public final String source;
+
+        public SavedReportStats(int totalOrders, int addOnOrders, double totalRevenue, String source) {
+            this.totalOrders = totalOrders;
+            this.addOnOrders = addOnOrders;
+            this.totalRevenue = totalRevenue;
+            this.source = source;
+        }
+    }
+
+    public SavedReportStats getSavedReportStats() {
+        if (DatabaseConnection.isAvailable()) {
+            String sql = "SELECT COUNT(*) AS cnt, "
+                    + "COALESCE(SUM(CASE WHEN order_type = 'Add-On' THEN 1 ELSE 0 END), 0) AS addon_cnt, "
+                    + "COALESCE(SUM(total_bill), 0) AS rev "
+                    + "FROM order_history";
+            try (Connection conn = DatabaseConnection.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                if (rs.next()) {
+                    return new SavedReportStats(
+                            rs.getInt("cnt"),
+                            rs.getInt("addon_cnt"),
+                            rs.getDouble("rev"),
+                            "MySQL");
+                }
+            } catch (SQLException ignored) {}
+        }
+
+        return fallbackFileHandler.getSavedStats();
+    }
+
+    public Map<String, Integer> getChefSavedOrderCounts() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        if (DatabaseConnection.isAvailable()) {
+            String sql = "SELECT chef_name, COUNT(*) AS cnt FROM order_history "
+                    + "WHERE chef_name IS NOT NULL GROUP BY chef_name";
+            try (Connection conn = DatabaseConnection.getConnection();
+                 Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                while (rs.next()) {
+                    counts.put(rs.getString("chef_name"), rs.getInt("cnt"));
+                }
+            } catch (SQLException ignored) {}
+        }
+        return counts;
     }
 }

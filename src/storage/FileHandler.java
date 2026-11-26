@@ -51,4 +51,24 @@ public class FileHandler {
         }
         System.out.println("---------------------------------------------------");
     }
+
+    public OrderDatabaseHandler.SavedReportStats getSavedStats() {
+        File file = new File(fileName);
+        if (!file.exists()) {
+            return new OrderDatabaseHandler.SavedReportStats(0, 0, 0.0, "Local File");
+        }
+        int count = 0;
+        double revenue = 0.0;
+        try (java.util.Scanner reader = new java.util.Scanner(file)) {
+            while (reader.hasNextLine()) {
+                String[] parts = reader.nextLine().split(",", 5);
+                if (parts.length < 5) continue;
+                try {
+                    revenue += Double.parseDouble(parts[2].trim());
+                    count++;
+                } catch (NumberFormatException ignored) {}
+            }
+        } catch (IOException ignored) {}
+        return new OrderDatabaseHandler.SavedReportStats(count, 0, revenue, "Local File");
+    }
 }

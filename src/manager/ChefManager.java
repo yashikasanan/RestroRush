@@ -12,11 +12,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 public class ChefManager {
+    public static final Object CONSOLE_LOCK = new Object();
+
     private final List<Chef> chefs = new ArrayList<>();
     private final ExecutorService kitchen = Executors.newFixedThreadPool(4);
     private final OrderManager orderManager;
     private final OrderDatabaseHandler dbHandler;
     private volatile boolean closed = false;
+    private volatile boolean awaitingMenuChoice = false;
 
     public ChefManager(OrderManager orderManager, OrderDatabaseHandler dbHandler) {
         this.orderManager = orderManager;
@@ -31,6 +34,14 @@ public class ChefManager {
         return closed;
     }
 
+    public boolean isAwaitingMenuChoice() {
+        return awaitingMenuChoice;
+    }
+
+    public void setAwaitingMenuChoice(boolean awaitingMenuChoice) {
+        this.awaitingMenuChoice = awaitingMenuChoice;
+    }
+
     // Give waiting orders to free chefs.
     public synchronized void dispatchPendingOrders() {
         if (closed) return;
@@ -42,6 +53,10 @@ public class ChefManager {
             if (order == null) break;
 
             chef.setAvailable(false);
+            chef.setCurrentOrderId(order.getOrderId());
+            chef.setExpectedFreeTimeMs(
+                    System.currentTimeMillis() + order.getPreparationTimeSeconds() * 1000L);
+            order.setStatus(Order.Status.PREPARING);
             order.setAssignedChefId(chef.getChefId());
             kitchen.submit(new ChefWorker(chef, order, this, dbHandler));
         }
@@ -49,6 +64,8 @@ public class ChefManager {
 
     public synchronized void chefFinished(Chef chef) {
         chef.setAvailable(true);
+        chef.setCurrentOrderId(-1);
+        chef.setExpectedFreeTimeMs(0);
         if (!closed) {
             dispatchPendingOrders();
         }
@@ -57,8 +74,11 @@ public class ChefManager {
     public synchronized void displayChefStatus() {
         System.out.println("\n--------------- KITCHEN STATUS ---------------");
         for (Chef chef : chefs) {
-            String status = chef.isAvailable() ? "AVAILABLE" : "PREPARING";
-            System.out.printf("%-10s | %-12s | Completed orders: %d%n",
+            int activeOrderId = chef.getCurrentOrderId();
+            String status = chef.isAvailable()
+                    ? "AVAILABLE"
+                    : (activeOrderId > 0 ? "PREPARING (ORD" + activeOrderId + ")" : "PREPARING");
+            System.out.printf("%-10s | %-20s | Completed orders: %d%n",
                     chef.getChefName(), status, chef.getCompletedOrders());
         }
         System.out.println("-----------------------------------------------");
@@ -66,6 +86,11 @@ public class ChefManager {
 
     public synchronized List<Chef> getChefs() {
         return new ArrayList<>(chefs);
+    }
+
+    private synchronized void closeKitchen() {
+        closed = true;
+        kitchen.shutdown();
     }
 
     public void shutdownChefs() {
@@ -80,10 +105,9 @@ public class ChefManager {
             }
         }
 
-        closed = true;
-        kitchen.shutdown();
+        closeKitchen();
         try {
-            if (!kitchen.awaitTermination(60, TimeUnit.SECONDS)) {
+            if (!kitchen.awaitTermination(120, TimeUnit.SECONDS)) {
                 kitchen.shutdownNow();
             }
         } catch (InterruptedException e) {

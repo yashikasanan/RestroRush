@@ -7,11 +7,12 @@ import java.util.List;
 import java.util.PriorityQueue;
 
 public class OrderManager {
-    private final PriorityQueue<Order> pendingOrders = new PriorityQueue<>(
+    public static final Comparator<Order> ORDER_PRIORITY_COMPARATOR =
         Comparator.comparingInt(Order::getPriority)
                   .thenComparing(Order::getOrderTime)
-                  .thenComparingInt(Order::getOrderId)
-    );
+                  .thenComparingInt(Order::getOrderId);
+
+    private final PriorityQueue<Order> pendingOrders = new PriorityQueue<>(ORDER_PRIORITY_COMPARATOR);
     private final List<Order> allOrders = new ArrayList<>();
     private int nextOrderId = 101;
 
@@ -20,7 +21,9 @@ public class OrderManager {
     }
 
     public synchronized void placeOrder(Order order) {
-        pendingOrders.offer(order);
+        if (order.getStatus() == Order.Status.PENDING) {
+            pendingOrders.offer(order);
+        }
         allOrders.add(order);
     }
 
@@ -56,15 +59,87 @@ public class OrderManager {
         return new ArrayList<>(pendingOrders);
     }
 
+    public synchronized List<Order> getCompletedDineInOrders() {
+        List<Order> eligible = new ArrayList<>();
+        for (Order order : allOrders) {
+            if (order.getStatus() == Order.Status.COMPLETED && order.isDineInSession()) {
+                eligible.add(order);
+            }
+        }
+        return eligible;
+    }
+
+    public synchronized boolean hasInProgressDineInOrders() {
+        for (Order order : allOrders) {
+            if (order.isDineInSession()
+                    && (order.getStatus() == Order.Status.PENDING
+                        || order.getStatus() == Order.Status.PREPARING)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public synchronized Order findLatestCompletedDineInOrderByCustomer(String customerName) {
+        if (customerName == null || customerName.trim().isEmpty()) return null;
+        String normalized = customerName.trim();
+        for (int i = allOrders.size() - 1; i >= 0; i--) {
+            Order order = allOrders.get(i);
+            if (order.getStatus() == Order.Status.COMPLETED
+                    && order.isDineInSession()
+                    && order.getCustomerName().equalsIgnoreCase(normalized)) {
+                return order;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Validates whether an existing order qualifies for a mid-meal priority Add-On.
+     * Returns null if eligible, or an explanation message if not.
+     */
+    public synchronized String validateAddOnEligibility(int originalOrderId) {
+        Order original = findOrder(originalOrderId);
+        if (original == null) {
+            return "Order ORD" + originalOrderId + " not found.";
+        }
+        if (!original.isDineInSession()) {
+            return "Order ORD" + originalOrderId + " is a Takeaway order. "
+                    + "Add-On priority is only for seated Dine-In customers currently eating.";
+        }
+        if (original.getStatus() == Order.Status.CANCELLED) {
+            return "Order ORD" + originalOrderId + " was cancelled and cannot receive an Add-On.";
+        }
+        if (original.getStatus() != Order.Status.COMPLETED) {
+            return "Order ORD" + originalOrderId + " is still " + original.getStatus()
+                    + ". Add-On priority unlocks once the customer's food has arrived (COMPLETED).";
+        }
+        return null;
+    }
+
+    public synchronized int getQueuePosition(int orderId) {
+        List<Order> sorted = new ArrayList<>(pendingOrders);
+        sorted.sort(ORDER_PRIORITY_COMPARATOR);
+        for (int i = 0; i < sorted.size(); i++) {
+            if (sorted.get(i).getOrderId() == orderId) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
     public synchronized void displayAllOrders() {
         System.out.println("\n---------------- ALL ORDERS ----------------");
         if (allOrders.isEmpty()) {
             System.out.println("No orders have been placed yet.");
         }
         for (Order order : allOrders) {
+            String summary = order.isAddOn()
+                    ? order.getDishSummary() + " [Add-On for ORD" + order.getParentOrderId() + "]"
+                    : order.getDishSummary();
             System.out.printf("ORD%d | %-12s | %-10s | %-10s | Rs. %.2f | %s%n",
                     order.getOrderId(), order.getCustomerName(), order.getOrderTypeString(),
-                    order.getStatus(), order.calculateTotal(), order.getDishSummary());
+                    order.getStatus(), order.calculateTotal(), summary);
         }
         System.out.println("--------------------------------------------");
     }
