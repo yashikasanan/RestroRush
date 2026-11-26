@@ -67,8 +67,9 @@ public class WaitTimeEstimator {
 
         for (Order order : pending) {
             int earliest = findEarliestFreeChef(chefFreeTimes);
+            int teamSize = Math.min(order.getRecommendedChefCount(), chefFreeTimes.size());
             long completion = chefFreeTimes.get(earliest)
-                    + order.getPreparationTimeSeconds() * 1000L;
+                    + order.getParallelPrepTimeSeconds(teamSize) * 1000L;
             chefFreeTimes.set(earliest, completion);
 
             if (order.getOrderId() == targetOrder.getOrderId()) {
@@ -135,8 +136,9 @@ public class WaitTimeEstimator {
 
             for (Order order : pendingOrders) {
                 int earliest = findEarliestFreeChef(chefFreeTimes);
+                int teamSize = Math.min(order.getRecommendedChefCount(), chefFreeTimes.size());
                 long completion = chefFreeTimes.get(earliest)
-                        + order.getPreparationTimeSeconds() * 1000L;
+                        + order.getParallelPrepTimeSeconds(teamSize) * 1000L;
                 chefFreeTimes.set(earliest, completion);
 
                 int waitSec = (int) ((completion - now + 999) / 1000);

@@ -7,6 +7,7 @@ public class Chef {
     private int completedOrders;
     private volatile long expectedFreeTimeMs;
     private volatile int currentOrderId = -1;
+    private volatile String currentTaskSummary = "";
 
     public Chef(int chefId, String chefName) {
         this.chefId = chefId;
@@ -33,4 +34,7 @@ public class Chef {
 
     public int getCurrentOrderId() { return currentOrderId; }
     public void setCurrentOrderId(int currentOrderId) { this.currentOrderId = currentOrderId; }
+
+    public String getCurrentTaskSummary() { return currentTaskSummary; }
+    public void setCurrentTaskSummary(String summary) { this.currentTaskSummary = summary != null ? summary : ""; }
 }

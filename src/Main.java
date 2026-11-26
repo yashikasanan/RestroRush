@@ -221,13 +221,6 @@ public class Main {
                 continue;
             }
 
-            int quantity = readInt("Enter quantity: ");
-            if (quantity == Integer.MIN_VALUE) break;
-            if (quantity <= 0) {
-                System.out.println("Quantity must be positive.");
-                continue;
-            }
-
             // Merge repeated selections of the same dish.
             OrderItem existing = null;
             for (OrderItem item : items) {
@@ -236,8 +229,35 @@ public class Main {
                     break;
                 }
             }
-
             int inCart = (existing == null ? 0 : existing.getQuantity());
+
+            if (dish.getAvailableQuantity() - inCart <= 0) {
+                System.out.println("[OUT OF STOCK] " + dish.getDishName()
+                        + " has no remaining stock available"
+                        + (inCart > 0 ? " (you already have " + inCart + " in this order)." : "."));
+                if (readYesNo("Would you like to refill/restock " + dish.getDishName() + " now? (y/n): ")) {
+                    int refillQty = readInt("Enter quantity to add: ");
+                    if (refillQty == Integer.MIN_VALUE) break;
+                    try {
+                        menuManager.restockDish(dishId, refillQty);
+                        System.out.println(dish.getDishName() + " refilled! Available now: "
+                                + dish.getAvailableQuantity());
+                    } catch (IllegalArgumentException e) {
+                        System.out.println(e.getMessage());
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            int quantity = readInt("Enter quantity: ");
+            if (quantity == Integer.MIN_VALUE) break;
+            if (quantity <= 0) {
+                System.out.println("Quantity must be positive.");
+                continue;
+            }
+
             int requestedTotal = quantity + inCart;
             if (!menuManager.isAvailable(dishId, requestedTotal)) {
                 int remainingCanAdd = Math.max(0, dish.getAvailableQuantity() - inCart);
@@ -334,13 +354,20 @@ public class Main {
 
     private static void restockDish(MenuManager menuManager) {
         menuManager.displayMenu();
-        int id = readInt("Enter dish ID to restock: ");
+        int id = readInt("Enter dish ID to restock (-1 to refill all low/empty dishes): ");
         if (id == Integer.MIN_VALUE) return;
         int quantity = readInt("Enter quantity to add: ");
         if (quantity == Integer.MIN_VALUE) return;
         try {
-            menuManager.restockDish(id, quantity);
-            System.out.println("Dish quantity updated successfully.");
+            if (id == -1) {
+                int count = menuManager.restockAllLowOrEmpty(quantity);
+                System.out.println(count > 0
+                        ? "Refilled " + count + " low/out-of-stock dish(es) by +" + quantity + "."
+                        : "No dishes are currently low or out of stock.");
+            } else {
+                menuManager.restockDish(id, quantity);
+                System.out.println("Dish quantity updated successfully.");
+            }
         } catch (IllegalArgumentException e) {
             System.out.println(e.getMessage());
         }

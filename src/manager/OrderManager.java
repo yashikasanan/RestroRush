@@ -7,8 +7,11 @@ import java.util.List;
 import java.util.PriorityQueue;
 
 public class OrderManager {
+    public static final long TAKEAWAY_AGING_THRESHOLD_MS = 20_000L; // 20 seconds wait promotes Takeaway -> Dine-In
+    public static final long DINE_IN_AGING_THRESHOLD_MS = 40_000L;  // 40 seconds wait promotes Dine-In -> Urgent
+
     public static final Comparator<Order> ORDER_PRIORITY_COMPARATOR =
-        Comparator.comparingInt(Order::getPriority)
+        Comparator.comparingInt(Order::getEffectivePriority)
                   .thenComparing(Order::getOrderTime)
                   .thenComparingInt(Order::getOrderId);
 
@@ -28,7 +31,46 @@ public class OrderManager {
     }
 
     public synchronized Order getNextOrder() {
+        applyPriorityAging();
         return pendingOrders.poll();
+    }
+
+    /**
+     * Anti-starvation: promotes long-waiting orders so Takeaway orders
+     * are never starved indefinitely by Dine-In / Add-On rushes.
+     */
+    public synchronized int applyPriorityAging() {
+        if (pendingOrders.isEmpty()) return 0;
+        long now = System.currentTimeMillis();
+        List<Order> toPromote = new ArrayList<>();
+
+        for (Order order : pendingOrders) {
+            long waitedMs = now - order.getCreatedAtMs();
+            if (order.getEffectivePriority() == Order.PRIORITY_TAKEAWAY
+                    && waitedMs >= TAKEAWAY_AGING_THRESHOLD_MS) {
+                toPromote.add(order);
+            } else if (order.getEffectivePriority() == Order.PRIORITY_DINE_IN
+                    && waitedMs >= DINE_IN_AGING_THRESHOLD_MS) {
+                toPromote.add(order);
+            }
+        }
+
+        if (toPromote.isEmpty()) return 0;
+
+        for (Order order : toPromote) {
+            pendingOrders.remove(order);
+            if (order.promoteByAging()) {
+                synchronized (ChefManager.CONSOLE_LOCK) {
+                    String newTier = order.getEffectivePriority() == Order.PRIORITY_DINE_IN
+                            ? "Dine-In Priority" : "Top Priority";
+                    System.out.println("\n[ANTI-STARVATION] ORD" + order.getOrderId()
+                            + " (" + order.getOrderTypeString() + ") waited "
+                            + ((now - order.getCreatedAtMs()) / 1000) + "s -> promoted to " + newTier + "!");
+                }
+            }
+            pendingOrders.offer(order);
+        }
+        return toPromote.size();
     }
 
     public synchronized boolean cancelOrder(int orderId) {
@@ -56,6 +98,7 @@ public class OrderManager {
     }
 
     public synchronized List<Order> getPendingOrders() {
+        applyPriorityAging();
         return new ArrayList<>(pendingOrders);
     }
 
@@ -118,6 +161,7 @@ public class OrderManager {
     }
 
     public synchronized int getQueuePosition(int orderId) {
+        applyPriorityAging();
         List<Order> sorted = new ArrayList<>(pendingOrders);
         sorted.sort(ORDER_PRIORITY_COMPARATOR);
         for (int i = 0; i < sorted.size(); i++) {
@@ -129,14 +173,19 @@ public class OrderManager {
     }
 
     public synchronized void displayAllOrders() {
+        applyPriorityAging();
         System.out.println("\n---------------- ALL ORDERS ----------------");
         if (allOrders.isEmpty()) {
             System.out.println("No orders have been placed yet.");
         }
         for (Order order : allOrders) {
-            String summary = order.isAddOn()
-                    ? order.getDishSummary() + " [Add-On for ORD" + order.getParentOrderId() + "]"
-                    : order.getDishSummary();
+            StringBuilder summary = new StringBuilder(order.getDishSummary());
+            if (order.isAddOn()) {
+                summary.append(" [Add-On for ORD").append(order.getParentOrderId()).append("]");
+            }
+            if (order.isPromotedByAging() && order.getStatus() == Order.Status.PENDING) {
+                summary.append(" [Aged Priority]");
+            }
             System.out.printf("ORD%d | %-12s | %-10s | %-10s | Rs. %.2f | %s%n",
                     order.getOrderId(), order.getCustomerName(), order.getOrderTypeString(),
                     order.getStatus(), order.calculateTotal(), summary);
